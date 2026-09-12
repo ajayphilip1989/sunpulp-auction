@@ -107,6 +107,13 @@ def save(state):
 # AUCTION LOGIC
 # --------------------------------------------------------------------------
 
+def visible_round(state):
+    """While a round is open, everything shown and checked refers to the last
+    CLOSED round. Bids placed in the open round stay hidden until it closes,
+    so every team in a round bids against the same benchmark."""
+    return state["round"] - 1 if state["open"] else state["round"]
+
+
 def accepted_bids(state, auction, upto_round=None):
     """Latest accepted bid per team, up to and including a round."""
     out = {}
@@ -121,31 +128,54 @@ def accepted_bids(state, auction, upto_round=None):
     return out
 
 
+def bid_times(state, auction, upto_round=None):
+    """When each team last moved to its standing price — used to break ties."""
+    out = {}
+    for b in state["bids"]:
+        if b["auction"] != auction:
+            continue
+        if upto_round is not None and b["round"] > upto_round:
+            continue
+        if b["status"] != "accepted" or not b["bidding"]:
+            continue
+        out[b["code"]] = b["ts"]
+    return out
+
+
 def last_submission(state, auction, code):
     rows = [b for b in state["bids"] if b["auction"] == auction and b["code"] == code]
     return rows[-1] if rows else None
 
 
 def standing_l1(state, auction, upto_round=None):
+    if upto_round is None:
+        upto_round = visible_round(state)
     bids = accepted_bids(state, auction, upto_round)
     return min(bids.values()) if bids else None
 
 
-def withdrawn(state, auction):
+def withdrawn(state, auction, upto_round=None):
     """Teams whose most recent submission said they are no longer bidding."""
+    if upto_round is None:
+        upto_round = visible_round(state)
     out = set()
     for code in AUCTIONS[auction]["teams"]:
-        last = last_submission(state, auction, code)
-        if last and not last["bidding"]:
+        rows = [b for b in state["bids"] if b["auction"] == auction
+                and b["code"] == code and b["round"] <= upto_round]
+        if rows and not rows[-1]["bidding"]:
             out.add(code)
     return out
 
 
 def ladder(state, auction, upto_round=None):
+    if upto_round is None:
+        upto_round = visible_round(state)
     bids = accepted_bids(state, auction, upto_round)
-    gone = withdrawn(state, auction)
+    gone = withdrawn(state, auction, upto_round)
+    times = bid_times(state, auction, upto_round)
     live = {c: p for c, p in bids.items() if c not in gone}
-    return sorted(live.items(), key=lambda kv: (kv[1], kv[0]))
+    # Equal bids are ranked by who submitted first.
+    return sorted(live.items(), key=lambda kv: (kv[1], times.get(kv[0], ""), kv[0]))
 
 
 def team_rank(state, auction, code):
@@ -166,8 +196,10 @@ def validate(state, auction, code, bid):
     if state["round"] <= 1:
         return "accepted", None
 
+    vr = visible_round(state)
     prev_rows = [b for b in state["bids"]
                  if b["auction"] == auction and b["code"] == code
+                 and b["round"] <= vr
                  and b["status"] == "accepted" and b["bidding"]]
     prev = prev_rows[-1]["bid"] if prev_rows else None
 
@@ -229,11 +261,12 @@ def bidder_view(state):
         return
 
     rnd = state["round"]
+    vr = visible_round(state)
     rank, total = team_rank(state, auction, code)
 
-    if rnd >= 1:
+    if vr >= 1:
         if rank:
-            st.success(f"After round {rnd}: your position is **L{rank}** of {total} live bidders.")
+            st.success(f"After round {vr}: your position is **L{rank}** of {total} live bidders.")
         else:
             st.info("You have no standing bid.")
         if cfg["show_l1"]:
@@ -323,8 +356,11 @@ def bidder_view(state):
 def projector_view(state):
     auction = state["auction"]
     cfg = AUCTIONS[auction]
+    vr = visible_round(state)
     st.title(f"{cfg['name']} — Round {state['round']}")
     st.caption(f"{cfg['item']} · {cfg['quantity']} · all prices {cfg['unit']}")
+    st.caption(f"Standings after round {vr}." if vr >= 1
+               else "No results yet.")
 
     if cfg["show_l1"]:
         l1 = standing_l1(state, auction)
@@ -387,6 +423,10 @@ def instructor_view(state):
         state["open"] = True
         save(state)
         st.rerun()
+
+    if state["open"]:
+        st.info(f"Round {state['round']} is open. The ladder below still shows "
+                f"round {visible_round(state)}. Close the round to update it.")
 
     st.divider()
     rows = ladder(state, auction)
