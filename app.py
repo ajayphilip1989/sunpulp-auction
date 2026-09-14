@@ -275,6 +275,47 @@ def money(x, unit=""):
     return f"Rs. {x:,.2f}{(' ' + unit) if unit else ''}"
 
 
+def already_predicted(state, auction, rnd, code):
+    return any(p["auction"] == auction and p["round"] == rnd and p["code"] == code
+               for p in state["predictions"])
+
+
+def prediction_box(state, code, label):
+    """Shown to anyone not actively bidding in the running auction."""
+    auction = state["auction"]
+    cfg = AUCTIONS[auction]
+    rnd = state["round"]
+
+    if not cfg["predictions"]:
+        st.info("No prediction is asked for in this auction. Please watch.")
+        return
+
+    if not state["open"]:
+        st.warning("Predictions are accepted only while a round is open.")
+        return
+
+    if already_predicted(state, auction, rnd, code):
+        st.success("Your prediction for this round has been recorded.")
+        return
+
+    st.subheader(f"{cfg['name']} — round {rnd}")
+    st.caption(label)
+    pred = st.number_input(
+        "Your prediction of the L1 price at the end of this round",
+        min_value=0.0, max_value=float(cfg["ceiling"]),
+        step=DECREMENT, format="%.2f", key=f"obs{code}{auction}{rnd}")
+    if st.button("Submit prediction", type="primary"):
+        state["predictions"].append({
+            "auction": auction, "round": rnd, "code": code,
+            "value": float(pred), "names": "",
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        })
+        save(state)
+        st.success("Prediction recorded.")
+        time.sleep(1)
+        st.rerun()
+
+
 # --------------------------------------------------------------------------
 # BIDDER VIEW
 # --------------------------------------------------------------------------
@@ -340,7 +381,19 @@ def bidder_view(state):
     st.caption(f"All prices are {cfg['unit']}. Minimum decrement Rs. {DECREMENT:.2f}.")
 
     if state["auction"] != auction:
-        st.warning(f"{cfg['name']} is not running at the moment. Please wait.")
+        run = state["auction"]
+        rcfg = AUCTIONS[run]
+        st.divider()
+        st.info(f"{cfg['name']} is not running. {rcfg['name']} is under way — "
+                f"{rcfg['item']}.")
+        if rcfg["show_l1"]:
+            l1 = standing_l1(state, run)
+            st.metric(f"{rcfg['name']} — current lowest bid (L1)",
+                      money(l1) if l1 is not None else "—")
+            st.caption(f"All prices {rcfg['unit']}. "
+                       f"Ceiling {money(rcfg['ceiling'])}.")
+        prediction_box(state, code,
+                       "You are not bidding in this auction. Predict where it will stand.")
         return
 
     rnd = state["round"]
@@ -358,6 +411,13 @@ def bidder_view(state):
                 st.metric("Current lowest bid (L1)", money(l1))
         else:
             st.caption("Bid amounts are not disclosed in this auction.")
+
+    if code in withdrawn(state, auction):
+        st.divider()
+        st.info("You have withdrawn from the bidding.")
+        prediction_box(state, code,
+                       "You are out of the bidding. Predict where this auction will stand.")
+        return
 
     if not state["open"]:
         st.warning("Bidding is closed. Wait for the next round to open.")
