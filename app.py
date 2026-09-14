@@ -145,7 +145,7 @@ def accepted_bids(state, auction, upto_round=None):
             continue
         if upto_round is not None and b["round"] > upto_round:
             continue
-        if b["status"] != "accepted" or not b["bidding"]:
+        if b["status"] not in ("accepted", "hold") or not b["bidding"]:
             continue
         out[b["code"]] = b["bid"]
     return out
@@ -161,7 +161,7 @@ def bid_times(state, auction, upto_round=None):
             continue
         if b["status"] != "accepted" or not b["bidding"]:
             continue
-        out[b["code"]] = b["ts"]
+        out[b["code"]] = b["ts"]      # holds keep the earlier timestamp
     return out
 
 
@@ -228,7 +228,7 @@ def validate(state, auction, code, bid):
     prev_rows = [b for b in state["bids"]
                  if b["auction"] == auction and b["code"] == code
                  and b["round"] <= vr
-                 and b["status"] == "accepted" and b["bidding"]]
+                 and b["status"] in ("accepted", "hold") and b["bidding"]]
     prev = prev_rows[-1]["bid"] if prev_rows else None
 
     if prev is not None and bid > prev:
@@ -485,58 +485,72 @@ def bidder_view(state):
         names = st.text_input("Team members' names (asked once only)",
                               key=f"nm{code}{rnd}")
 
-    still = st.radio("Are you still bidding?", ["Yes", "No"], key=f"sb{code}{rnd}")
+    own = own_standing_bid(state, auction, code)
 
-    if still == "Yes":
+    choices = ["Lower my bid"]
+    if own is not None:
+        choices.append("Hold at my current bid")
+    choices.append("Withdraw from the auction")
+
+    action = st.radio("What will you do this round?", choices, key=f"ac{code}{rnd}")
+
+    def record(bidding, bid, status, pred=None):
+        if not names.strip():
+            st.error("Please enter your names.")
+            return False
+        state["bids"].append({
+            "auction": auction, "round": rnd, "code": code, "bidding": bidding,
+            "bid": bid, "status": status, "names": names.strip(),
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        })
+        if pred is not None:
+            state["predictions"].append({
+                "auction": auction, "round": rnd, "code": code,
+                "value": float(pred), "names": names.strip(),
+                "ts": datetime.now().isoformat(timespec="seconds"),
+            })
+        save(state)
+        return True
+
+    if action == "Lower my bid":
         bid = st.number_input(f"Your bid ({cfg['unit']})", min_value=0.0,
                               max_value=float(cfg["ceiling"]), step=DECREMENT,
                               format="%.2f", key=f"bd{code}{rnd}")
-        st.caption("To pass this round, enter the same amount as your previous bid.")
         if st.button("Submit bid", type="primary"):
-            if not names.strip():
-                st.error("Please enter your names.")
-                return
             status, msg = validate(state, auction, code, float(bid))
-            state["bids"].append({
-                "auction": auction, "round": rnd, "code": code, "bidding": True,
-                "bid": float(bid), "status": status, "names": names.strip(),
-                "ts": datetime.now().isoformat(timespec="seconds"),
-            })
-            save(state)
-            if status == "accepted":
-                st.success(f"Bid of {money(float(bid))} accepted.")
-            elif status == "pass":
-                st.info(msg)
-            else:
-                st.error(msg)
-            time.sleep(1)
-            st.rerun()
+            if record(True, float(bid), status):
+                if status == "accepted":
+                    st.success(f"Bid of {money(float(bid))} accepted.")
+                elif status == "pass":
+                    st.info(msg)
+                else:
+                    st.error(msg)
+                time.sleep(1)
+                st.rerun()
+
+    elif action == "Hold at my current bid":
+        st.info(f"You will stay at {money(own)}. Your margin at that price is "
+                f"{money(own - cost)}.")
+        st.caption("Holding is a decision, not a missed round. Use it when you "
+                   "think you can win without going lower.")
+        if st.button("Hold this round", type="primary"):
+            if record(True, own, "hold"):
+                st.success(f"Held at {money(own)}.")
+                time.sleep(1)
+                st.rerun()
+
     else:
-        st.caption("Withdraw once bidding below your cost would lose you money.")
+        st.caption("Withdraw once bidding lower would put you below your cost.")
         pred = None
         if cfg["predictions"]:
-            pred = st.number_input("Your prediction of the L1 price at the end of the next round",
+            pred = st.number_input("Your prediction of the L1 price at the end of this round",
                                    min_value=0.0, max_value=float(cfg["ceiling"]),
                                    step=DECREMENT, format="%.2f", key=f"pr{code}{rnd}")
         if st.button("Confirm withdrawal", type="primary"):
-            if not names.strip():
-                st.error("Please enter your names.")
-                return
-            state["bids"].append({
-                "auction": auction, "round": rnd, "code": code, "bidding": False,
-                "bid": None, "status": "withdrawn", "names": names.strip(),
-                "ts": datetime.now().isoformat(timespec="seconds"),
-            })
-            if pred is not None:
-                state["predictions"].append({
-                    "auction": auction, "round": rnd, "code": code,
-                    "value": float(pred), "names": names.strip(),
-                    "ts": datetime.now().isoformat(timespec="seconds"),
-                })
-            save(state)
-            st.success("Recorded. You are out of the bidding.")
-            time.sleep(1)
-            st.rerun()
+            if record(False, None, "withdrawn", pred):
+                st.success("Recorded. You are out of the bidding.")
+                time.sleep(1)
+                st.rerun()
 
 
 # --------------------------------------------------------------------------
@@ -611,6 +625,35 @@ def prediction_chart(state, auction):
             x=x, y=alt.Y("Actual L1:Q"), tooltip=["Round", "Actual L1"]))
 
     return alt.layer(*layers).properties(height=340).interactive()
+
+
+def l1_behaviour(state, auction):
+    """For each closed round: who was L1, and what that team did next round."""
+    rounds = sorted({b["round"] for b in state["bids"] if b["auction"] == auction})
+    out = []
+    for r in rounds:
+        lad = ladder(state, auction, upto_round=r)
+        if not lad:
+            continue
+        leader, price = lad[0]
+        nxt = [b for b in state["bids"] if b["auction"] == auction
+               and b["code"] == leader and b["round"] == r + 1]
+        if not nxt:
+            did = "silent" if (r + 1) in rounds else "—"
+            newp = ""
+        else:
+            last = nxt[-1]
+            if not last["bidding"]:
+                did, newp = "withdrew", ""
+            elif last["status"] == "hold":
+                did, newp = "held", money(last["bid"])
+            elif last["status"] == "accepted":
+                did, newp = "cut", money(last["bid"])
+            else:
+                did, newp = f"tried, {last['status']}", ""
+        out.append({"After round": r, "L1 team": leader, "L1 price": money(price),
+                    "Next round": did, "New bid": newp})
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -712,6 +755,16 @@ def instructor_view(state):
         d3.download_button("Everything (JSON backup)",
                            data=json.dumps(state, indent=2),
                            file_name="auction_data.json", mime="application/json")
+
+    st.divider()
+    with st.expander("What the L1 team did next (show at the end)"):
+        for k in AUCTIONS:
+            rows = l1_behaviour(state, k)
+            if rows:
+                st.write(f"**{AUCTIONS[k]['name']}**")
+                st.dataframe(rows, hide_index=True, width="stretch")
+        st.caption("Cuts early and holds late is the pattern to look for: once the "
+                   "field thins, the leader can win without going lower.")
 
     st.divider()
     with st.expander("Prediction convergence (show at the end)"):
