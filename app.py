@@ -253,22 +253,40 @@ def team_names(state, auction, code):
 
 
 def bids_csv(state):
+    lookup = names_by_code(state)
     rows = ["auction,round,team_code,names,cost,bid,status,timestamp"]
     for b in state["bids"]:
         cfg = AUCTIONS[b["auction"]]
         cost = cfg["teams"].get(b["code"], "")
-        names = str(b.get("names", "")).replace('"', "'")
+        names = (str(b.get("names", "")).strip()
+                 or lookup.get(b["code"], "")).replace('"', "'")
         bid = "" if b["bid"] is None else f"{b['bid']:.2f}"
         rows.append(f'{b["auction"]},{b["round"]},{b["code"]},"{names}",'
                     f'{cost},{bid},{b["status"]},{b["ts"]}')
     return "\n".join(rows)
 
 
+def names_by_code(state):
+    """Code -> names, taken from the first bid in which a team gave them.
+    Used only when exporting, so a team that predicts before it ever bids can
+    still be identified once its own auction has run."""
+    out = {}
+    for b in state["bids"]:
+        nm = str(b.get("names", "")).strip()
+        if nm and b["code"] not in out:
+            out[b["code"]] = nm
+    return out
+
+
 def predictions_csv(state):
-    rows = ["auction,round,team_code,names,predicted_l1,timestamp"]
+    lookup = names_by_code(state)
+    rows = ["auction,round,team_code,names,predictor,predicted_l1,timestamp"]
     for p in state["predictions"]:
-        names = str(p.get("names", "")).replace('"', "'")
-        rows.append(f'{p["auction"]},{p["round"]},{p["code"]},"{names}",'
+        nm = str(p.get("names", "")).strip() or lookup.get(p["code"], "")
+        nm = nm.replace('"', "'")
+        own = p["code"] in AUCTIONS[p["auction"]]["teams"]
+        role = "withdrawn" if own else "observer"
+        rows.append(f'{p["auction"]},{p["round"]},{p["code"]},"{nm}",{role},'
                     f'{p["value"]:.2f},{p["ts"]}')
     return "\n".join(rows)
 
