@@ -201,6 +201,11 @@ def ladder(state, auction, upto_round=None):
     return sorted(live.items(), key=lambda kv: (kv[1], times.get(kv[0], ""), kv[0]))
 
 
+def own_standing_bid(state, auction, code):
+    """This team's latest accepted bid, counting closed rounds only."""
+    return accepted_bids(state, auction).get(code)
+
+
 def team_rank(state, auction, code):
     for i, (c, _) in enumerate(ladder(state, auction), start=1):
         if c == code:
@@ -421,16 +426,31 @@ def bidder_view(state):
     rank, total = team_rank(state, auction, code)
 
     if vr >= 1:
+        own = own_standing_bid(state, auction, code)
+
         if rank:
             st.success(f"After round {vr}: your position is **L{rank}** of {total} live bidders.")
-        else:
+        elif own is None:
             st.info("You have no standing bid.")
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Your standing bid", money(own) if own is not None else "—")
+        if own is not None:
+            margin = own - cost
+            m2.metric("Your margin at that bid", money(margin),
+                      delta=("above your cost" if margin > 0 else
+                             "at your cost" if abs(margin) < 1e-9 else
+                             "below your cost"),
+                      delta_color="normal" if margin > 0 else "inverse")
         if cfg["show_l1"]:
             l1 = standing_l1(state, auction)
-            if l1 is not None:
-                st.metric("Current lowest bid (L1)", money(l1))
+            m3.metric("Current lowest bid (L1)", money(l1) if l1 is not None else "—")
         else:
-            st.caption("Bid amounts are not disclosed in this auction.")
+            m3.metric("Current lowest bid (L1)", "not disclosed")
+
+        if not cfg["show_l1"]:
+            st.caption("Bid amounts are not disclosed in this auction. "
+                       "You see only your own bid and your rank.")
 
     if code in withdrawn(state, auction):
         st.divider()
