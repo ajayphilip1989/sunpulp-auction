@@ -23,6 +23,10 @@ import streamlit as st
 # --------------------------------------------------------------------------
 
 INSTRUCTOR_PASSWORD = "sunpulp2026"        # change before class
+PROJECTOR_PASSWORD = "screen26"             # for the front screen only
+
+# NEVER put the instructor view on the projector: it shows every team's cost
+# and margin. Use the Projector view, which shows only what the class may see.
 DECREMENT = 0.10                            # minimum decrement, same in all auctions
 STATE_FILE = "state.json"
 
@@ -600,7 +604,15 @@ def main():
     if role == "Bidder":
         bidder_view(state)
     elif role == "Projector":
-        projector_view(state)
+        if st.session_state.get("proj_ok"):
+            projector_view(state)
+        else:
+            pw = st.sidebar.text_input("Projector password", type="password")
+            if pw == PROJECTOR_PASSWORD:
+                st.session_state["proj_ok"] = True
+                st.rerun()
+            else:
+                st.info("This view is for the classroom screen only.")
     else:
         pw = st.sidebar.text_input("Password", type="password")
         if pw == INSTRUCTOR_PASSWORD:
