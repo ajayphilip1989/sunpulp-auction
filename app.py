@@ -69,6 +69,23 @@ AUCTIONS = {
 }
 
 
+
+# One PIN per team, printed on that team's cost card. Stops a team bidding
+# under another team's code. Change these freely; they only need to be unique
+# enough that a neighbour cannot guess them.
+PINS = {
+    # Auction 1
+    "K7": "4182", "M2": "7315", "R9": "2946", "T4": "6073", "B6": "5821",
+    "J3": "3497", "W8": "1638", "D5": "9254", "P1": "8706",
+    # Auction 2
+    "H2": "5390", "N5": "2714", "C8": "6842", "V3": "1075", "L9": "9436",
+    "G4": "3268", "Z7": "7519", "F1": "4087", "Q6": "8651",
+    # Auction 3
+    "X4": "2073", "S8": "6418", "A2": "9527", "Y6": "3841", "E9": "7192",
+    "U3": "5604", "I7": "1385", "O5": "4769", "TT": "8230", "MM": "6947",
+}
+
+
 # --------------------------------------------------------------------------
 # SHARED STATE
 # --------------------------------------------------------------------------
@@ -221,6 +238,35 @@ def validate(state, auction, code, bid):
     return "accepted", None
 
 
+def team_names(state, auction, code):
+    """The names this team entered on its first submission."""
+    for b in state["bids"]:
+        if b["auction"] == auction and b["code"] == code and b.get("names"):
+            return b["names"]
+    return ""
+
+
+def bids_csv(state):
+    rows = ["auction,round,team_code,names,cost,bid,status,timestamp"]
+    for b in state["bids"]:
+        cfg = AUCTIONS[b["auction"]]
+        cost = cfg["teams"].get(b["code"], "")
+        names = str(b.get("names", "")).replace('"', "'")
+        bid = "" if b["bid"] is None else f"{b['bid']:.2f}"
+        rows.append(f'{b["auction"]},{b["round"]},{b["code"]},"{names}",'
+                    f'{cost},{bid},{b["status"]},{b["ts"]}')
+    return "\n".join(rows)
+
+
+def predictions_csv(state):
+    rows = ["auction,round,team_code,names,predicted_l1,timestamp"]
+    for p in state["predictions"]:
+        names = str(p.get("names", "")).replace('"', "'")
+        rows.append(f'{p["auction"]},{p["round"]},{p["code"]},"{names}",'
+                    f'{p["value"]:.2f},{p["ts"]}')
+    return "\n".join(rows)
+
+
 def money(x, unit=""):
     return f"Rs. {x:,.2f}{(' ' + unit) if unit else ''}"
 
@@ -232,10 +278,38 @@ def money(x, unit=""):
 def bidder_view(state):
     st.title("SunPulp Foods — Reverse Auction")
 
-    code = st.text_input("Your team code").strip().upper()
-    if not code:
-        st.info("Enter the team code printed on your cost card.")
-        return
+    # A team stays signed in because the code and PIN are carried in the URL.
+    # A browser refresh starts a new Streamlit session and would otherwise wipe
+    # the sign-in, so the URL is what makes refreshing painless.
+    qp = st.query_params
+    signed = st.session_state.get("team_code")
+
+    if not signed:
+        qcode = (qp.get("code") or "").strip().upper()
+        qpin = (qp.get("pin") or "").strip()
+        if qcode in PINS and qpin == PINS[qcode]:
+            st.session_state["team_code"] = qcode
+            signed = qcode
+
+    if not signed:
+        code = st.text_input("Your team code").strip().upper()
+        pin = st.text_input("PIN", max_chars=4).strip()
+        if not code or not pin:
+            st.info("Enter the team code and PIN printed on your cost card. "
+                    "You will only be asked once.")
+            return
+        if code not in PINS:
+            st.error("That code is not recognised. Check your cost card.")
+            return
+        if pin != PINS[code]:
+            st.error("That PIN does not match the code. Check your cost card.")
+            return
+        st.session_state["team_code"] = code
+        st.query_params["code"] = code
+        st.query_params["pin"] = pin
+        st.rerun()
+
+    code = signed
 
     auction = None
     for a, cfg in AUCTIONS.items():
@@ -245,6 +319,11 @@ def bidder_view(state):
     if auction is None:
         st.error("That code is not recognised. Check your cost card.")
         return
+
+    if st.sidebar.button("Sign out"):
+        st.session_state.pop("team_code", None)
+        st.query_params.clear()
+        st.rerun()
 
     cfg = AUCTIONS[auction]
     cost = cfg["teams"][code]
@@ -294,7 +373,14 @@ def bidder_view(state):
         if not st.checkbox("Change my submission for this round"):
             return
 
-    names = st.text_input("Team members' names", key=f"nm{code}{rnd}")
+    known = team_names(state, auction, code)
+    if known:
+        names = known
+        st.caption(f"Bidding as: {known}")
+    else:
+        names = st.text_input("Team members' names (asked once only)",
+                              key=f"nm{code}{rnd}")
+
     still = st.radio("Are you still bidding?", ["Yes", "No"], key=f"sb{code}{rnd}")
 
     if still == "Yes":
@@ -478,9 +564,14 @@ def instructor_view(state):
                          f"margin {money(price - c2['teams'][win])} {c2['unit']}")
             else:
                 st.write(f"**{c2['name']}** — not run yet")
-        st.download_button("Download all data (JSON)",
+        d1, d2, d3 = st.columns(3)
+        d1.download_button("Bids (CSV)", data=bids_csv(state),
+                           file_name="auction_bids.csv", mime="text/csv")
+        d2.download_button("Predictions (CSV)", data=predictions_csv(state),
+                           file_name="auction_predictions.csv", mime="text/csv")
+        d3.download_button("Everything (JSON backup)",
                            data=json.dumps(state, indent=2),
-                           file_name="auction_data.json")
+                           file_name="auction_data.json", mime="application/json")
 
     st.divider()
     with st.expander("Danger zone"):
