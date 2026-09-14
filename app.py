@@ -16,6 +16,8 @@ import os
 import time
 from datetime import datetime
 
+import altair as alt
+import pandas as pd
 import streamlit as st
 
 # --------------------------------------------------------------------------
@@ -537,6 +539,42 @@ def projector_view(state):
         st.rerun()
 
 
+def prediction_chart(state, auction):
+    """Scatter of predictions per round, with the actual L1 line over it."""
+    cfg = AUCTIONS[auction]
+    preds = [p for p in state["predictions"] if p["auction"] == auction]
+    if not preds:
+        return None
+
+    dots = pd.DataFrame([{"Round": p["round"], "Predicted L1": p["value"]}
+                         for p in preds])
+
+    rounds = sorted(dots["Round"].unique())
+    actual = []
+    for r in rounds:
+        v = standing_l1(state, auction, upto_round=int(r))
+        if v is not None:
+            actual.append({"Round": int(r), "Actual L1": v})
+
+    y = alt.Y("Predicted L1:Q", title=f"Price ({cfg['unit']})",
+              scale=alt.Scale(zero=False))
+    x = alt.X("Round:O", title="Round")
+
+    layers = [
+        alt.Chart(dots).mark_circle(size=90, opacity=0.55).encode(
+            x=x, y=y, tooltip=["Round", "Predicted L1"]),
+        alt.Chart(dots).mark_tick(size=40, thickness=3, color="black").encode(
+            x=x, y=alt.Y("median(Predicted L1):Q")),
+    ]
+    if actual:
+        adf = pd.DataFrame(actual)
+        layers.append(alt.Chart(adf).mark_line(point=True, strokeWidth=3,
+                                               color="#00875A").encode(
+            x=x, y=alt.Y("Actual L1:Q"), tooltip=["Round", "Actual L1"]))
+
+    return alt.layer(*layers).properties(height=340).interactive()
+
+
 # --------------------------------------------------------------------------
 # INSTRUCTOR VIEW
 # --------------------------------------------------------------------------
@@ -636,6 +674,34 @@ def instructor_view(state):
         d3.download_button("Everything (JSON backup)",
                            data=json.dumps(state, indent=2),
                            file_name="auction_data.json", mime="application/json")
+
+    st.divider()
+    with st.expander("Prediction convergence (show at the end)"):
+        any_chart = False
+        for k in AUCTIONS:
+            if not AUCTIONS[k]["predictions"]:
+                continue
+            ch = prediction_chart(state, k)
+            if ch is None:
+                continue
+            any_chart = True
+            st.write(f"**{AUCTIONS[k]['name']}** — black tick is the class median, "
+                     f"green line is the price that actually stood after each round.")
+            st.altair_chart(ch, use_container_width=True)
+
+            rows = []
+            for r in sorted({p["round"] for p in state["predictions"]
+                             if p["auction"] == k}):
+                vals = [p["value"] for p in state["predictions"]
+                        if p["auction"] == k and p["round"] == r]
+                act = standing_l1(state, k, upto_round=int(r))
+                rows.append({"Round": r, "Predictions": len(vals),
+                             "Lowest": money(min(vals)), "Highest": money(max(vals)),
+                             "Spread": money(max(vals) - min(vals)),
+                             "Actual L1": money(act) if act is not None else "—"})
+            st.dataframe(rows, hide_index=True, width="stretch")
+        if not any_chart:
+            st.caption("No predictions recorded yet.")
 
     st.divider()
     with st.expander("Danger zone"):
