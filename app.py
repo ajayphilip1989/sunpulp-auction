@@ -44,6 +44,7 @@ AUCTIONS = {
         "teams": {
             "K7": 7.20, "M2": 7.80, "R9": 8.05, "T4": 8.15, "B6": 8.60,
             "J3": 9.30, "W8": 9.45, "D5": 9.80, "P1": 10.55,
+            "R4": 8.90, "W2": 10.85,          # spare cards (solo students)
         },
     },
     2: {
@@ -57,6 +58,7 @@ AUCTIONS = {
         "teams": {
             "H2": 7.20, "N5": 7.80, "C8": 8.05, "V3": 8.15, "L9": 8.60,
             "G4": 9.30, "Z7": 9.45, "F1": 9.80, "Q6": 10.55,
+            "N8": 8.90, "G6": 10.85,          # spare cards (solo students)
         },
     },
     3: {
@@ -70,6 +72,7 @@ AUCTIONS = {
         "teams": {
             "X4": 25.20, "S8": 27.00, "A2": 27.25, "Y6": 27.35, "E9": 27.80,
             "U3": 28.50, "I7": 28.65, "O5": 29.00, "TT": 29.75, "MM": 30.05,
+            "S3": 28.10,                      # spare card (solo students)
         },
     },
 }
@@ -83,12 +86,15 @@ PINS = {
     # Auction 1
     "K7": "4182", "M2": "7315", "R9": "2946", "T4": "6073", "B6": "5821",
     "J3": "3497", "W8": "1638", "D5": "9254", "P1": "8706",
+    "R4": "3159", "W2": "8462",
     # Auction 2
     "H2": "5390", "N5": "2714", "C8": "6842", "V3": "1075", "L9": "9436",
     "G4": "3268", "Z7": "7519", "F1": "4087", "Q6": "8651",
+    "N8": "5937", "G6": "2608",
     # Auction 3
     "X4": "2073", "S8": "6418", "A2": "9527", "Y6": "3841", "E9": "7192",
     "U3": "5604", "I7": "1385", "O5": "4769", "TT": "8230", "MM": "6947",
+    "S3": "7341",
 }
 
 
@@ -721,10 +727,18 @@ def instructor_view(state):
                        "Bid": money(b["bid"]) if b["bid"] is not None else "—",
                        "Status": b["status"], "Time": b["ts"][11:]}
                       for b in this_round], hide_index=True, width="stretch")
+        # Teams that have never submitted in this auction are most likely
+        # unused spare cards, so they are listed apart and never block anything.
+        joined = {b["code"] for b in state["bids"] if b["auction"] == auction}
         yet = [c for c in cfg["teams"]
-               if c not in {b["code"] for b in this_round} and c not in gone]
+               if c not in {b["code"] for b in this_round} and c not in gone
+               and (c in joined or state["round"] <= 1)]
+        never = [c for c in cfg["teams"] if c not in joined]
         if yet:
             st.caption("Yet to submit: " + ", ".join(sorted(yet)))
+        if never and state["round"] > 1:
+            st.caption("Never joined (cards probably not handed out): "
+                       + ", ".join(sorted(never)))
     else:
         st.caption("Nothing submitted yet this round.")
 
