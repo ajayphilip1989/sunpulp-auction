@@ -24,8 +24,8 @@ import streamlit as st
 # CONFIGURATION — edit costs, codes and items here
 # --------------------------------------------------------------------------
 
-INSTRUCTOR_PASSWORD = "sunpulp2026"        # change before class
-PROJECTOR_PASSWORD = "screen26"             # for the front screen only
+INSTRUCTOR_PASSWORD = "Sanjana@57"        # change before class
+PROJECTOR_PASSWORD = "Prateeka@57"             # for the front screen only
 
 # NEVER put the instructor view on the projector: it shows every team's cost
 # and margin. Use the Projector view, which shows only what the class may see.
