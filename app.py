@@ -24,8 +24,8 @@ import streamlit as st
 # CONFIGURATION — edit costs, codes and items here
 # --------------------------------------------------------------------------
 
-INSTRUCTOR_PASSWORD = "Sanjana@57"        # change before class
-PROJECTOR_PASSWORD = "Prateeka@57"             # for the front screen only
+INSTRUCTOR_PASSWORD = "sunpulp2026"        # change before class
+PROJECTOR_PASSWORD = "screen26"             # for the front screen only
 
 # NEVER put the instructor view on the projector: it shows every team's cost
 # and margin. Use the Projector view, which shows only what the class may see.
@@ -331,11 +331,12 @@ def prediction_box(state, code, label):
 
     st.subheader(f"{cfg['name']} — round {rnd}")
     st.caption(label)
-    pred = st.number_input(
-        "Your prediction of the L1 price at the end of this round",
-        min_value=0.0, max_value=float(cfg["ceiling"]),
-        step=DECREMENT, format="%.2f", key=f"obs{code}{auction}{rnd}")
-    if st.button("Submit prediction", type="primary"):
+    ok, pred = amount_form("Your prediction of the L1 price at the end of this round",
+                           f"obs{code}{auction}{rnd}", "Submit prediction")
+    if ok and pred is not None and pred > float(cfg["ceiling"]):
+        st.error(f"That is above the ceiling of {money(cfg['ceiling'])}. Check the amount.")
+        ok = False
+    if ok:
         state["predictions"].append({
             "auction": auction, "round": rnd, "code": code,
             "value": float(pred), "names": "",
@@ -350,6 +351,28 @@ def prediction_box(state, code, label):
 # --------------------------------------------------------------------------
 # BIDDER VIEW
 # --------------------------------------------------------------------------
+
+
+def amount_form(label, key, button, allow_blank=False):
+    """Typed amount inside a form, so the value is read exactly as typed
+    at the moment the button is pressed. Returns (submitted, value)."""
+    with st.form(key, clear_on_submit=False):
+        raw = st.text_input(label + " — type the amount, e.g. 9.40", key=key + "_t")
+        submitted = st.form_submit_button(button, type="primary")
+    if not submitted:
+        return False, None
+    txt = raw.replace(",", "").replace("Rs.", "").replace("Rs", "").replace("₹", "").strip()
+    if txt == "" and allow_blank:
+        return True, None
+    try:
+        val = round(float(txt), 2)
+    except ValueError:
+        st.error(f"'{raw}' is not a number. Type the amount with a decimal point, e.g. 9.40")
+        return False, None
+    if val <= 0:
+        st.error("The amount must be above zero.")
+        return False, None
+    return True, val
 
 def bidder_view(state):
     st.title("SunPulp Foods — Reverse Auction")
@@ -480,7 +503,7 @@ def bidder_view(state):
             st.info(f"Submitted this round: {money(last['bid'])} — {last['status']}.")
         else:
             st.info("Submitted this round: withdrawn from bidding.")
-        if not st.checkbox("Change my submission for this round"):
+        if not st.checkbox("Change my submission for this round", key=f"chg{code}{rnd}"):
             return
 
     known = team_names(state, auction, code)
@@ -504,6 +527,18 @@ def bidder_view(state):
         if not names.strip():
             st.error("Please enter your names.")
             return False
+        # Guard against two phones signed in with the same team code: if this
+        # round already has a submission that this phone did not choose to
+        # replace, refuse and show what is on record.
+        existing = [b for b in state["bids"]
+                    if b["auction"] == auction and b["code"] == code and b["round"] == rnd]
+        if existing and not st.session_state.get(f"chg{code}{rnd}", False):
+            last = existing[-1]
+            shown = money(last["bid"]) if last["bidding"] else "withdrawn"
+            st.error(f"Your team has already submitted this round ({shown}), "
+                     f"probably from another phone. Only one phone per team should bid. "
+                     f"Refresh the page to see it; tick 'Change my submission' to replace it.")
+            return False
         state["bids"].append({
             "auction": auction, "round": rnd, "code": code, "bidding": bidding,
             "bid": bid, "status": status, "names": names.strip(),
@@ -519,10 +554,8 @@ def bidder_view(state):
         return True
 
     if action == "Lower my bid":
-        bid = st.number_input(f"Your bid ({cfg['unit']})", min_value=0.0,
-                              max_value=float(cfg["ceiling"]), step=DECREMENT,
-                              format="%.2f", key=f"bd{code}{rnd}")
-        if st.button("Submit bid", type="primary"):
+        ok, bid = amount_form(f"Your bid ({cfg['unit']})", f"bd{code}{rnd}", "Submit bid")
+        if ok:
             status, msg = validate(state, auction, code, float(bid))
             if record(True, float(bid), status):
                 if status == "accepted":
@@ -547,12 +580,12 @@ def bidder_view(state):
 
     else:
         st.caption("Withdraw once bidding lower would put you below your cost.")
-        pred = None
         if cfg["predictions"]:
-            pred = st.number_input("Your prediction of the L1 price at the end of this round",
-                                   min_value=0.0, max_value=float(cfg["ceiling"]),
-                                   step=DECREMENT, format="%.2f", key=f"pr{code}{rnd}")
-        if st.button("Confirm withdrawal", type="primary"):
+            ok, pred = amount_form("Your prediction of the L1 price at the end of this round",
+                                   f"pr{code}{rnd}", "Confirm withdrawal")
+        else:
+            ok, pred = st.button("Confirm withdrawal", type="primary"), None
+        if ok:
             if record(False, None, "withdrawn", pred):
                 st.success("Recorded. You are out of the bidding.")
                 time.sleep(1)
